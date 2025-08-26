@@ -20,7 +20,8 @@ interface SidebarProps {
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home },
-  { name: "Companies", href: "/companies", icon: Building2 },
+  { name: "Add Companies", href: "/companies", icon: Building2 },
+  { name: "Companies", href: "/listcompanies", icon: Building2 },
   { name: "Products", href: "/products", icon: Package },
   { name: "Bills", href: "/bills", icon: FileText },
   // { name: "Analytics", href: "/analytics", icon: BarChart3 },

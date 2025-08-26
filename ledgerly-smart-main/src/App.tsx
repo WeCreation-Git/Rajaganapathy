@@ -7,6 +7,7 @@ import { ThemeProvider } from "./components/theme-provider";
 import { Layout } from "./components/layout/Layout";
 import Dashboard from "./pages/Dashboard";
 import Companies from "./pages/Companies";
+import ListCompanies from "./pages/listcompanies";
 import Products from "./pages/Products";
 import Bills from "./pages/Bills";
 import Analytics from "./pages/Analytics";
@@ -26,6 +27,7 @@ const App = () => (
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="companies" element={<Companies />} />
+           <Route path="listcompanies" element={<ListCompanies />} />
             <Route path="products" element={<Products />} />
             <Route path="bills" element={<Bills />} />
             <Route path="analytics" element={<Analytics />} />

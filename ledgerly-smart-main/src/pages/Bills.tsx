@@ -297,8 +297,8 @@ const ViewBillModal = ({ isOpen, onClose, billData }) => {
            <Button onClick={() => handleTemplateSelect('invoiceI')}> {/* Button for InvoiceI */}
             Tax Invoice
           </Button>
-          <Button onClick={() => handleTemplateSelect('templateA')}>
-            E Invoice 
+          <Button>
+            <a href="https://ewaybillgst.gov.in/Login.aspx" target="_blank" rel="noopener noreferrer">E-Way Bill</a>
           </Button>
         </div>
         {selectedTemplate && (
