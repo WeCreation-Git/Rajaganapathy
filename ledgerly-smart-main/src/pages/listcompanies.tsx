@@ -2,8 +2,26 @@ import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Search, Loader2 } from "lucide-react";
+import {
+  Building2,
+  Search,
+  Loader2,
+  MoreHorizontal,
+  PlusCircle,
+  History,
+  ArrowRight,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Label } from "@/components/ui/label";
 
 const ITEMS_PER_PAGE = 10;
 
@@ -12,7 +30,15 @@ const CompaniesTable = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [companies, setCompanies] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("active");
+  const [filterStatus, setFilterStatus] = useState("active");
+
+  // Action modal state
+  const [openActionDialog, setOpenActionDialog] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [transactionType, setTransactionType] = useState("buy");
+  const [transactionAmount, setTransactionAmount] = useState("");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [historyData, setHistoryData] = useState([]);
 
   useEffect(() => {
     const fetchCompanies = async () => {
@@ -20,82 +46,171 @@ const CompaniesTable = () => {
       setLoadingCompanies(true);
 
       try {
-        // Fetch companies depending on filter
         let filterQuery = "";
-
-        if (filterStatus === "active") {
-          filterQuery = "isactive.eq.true";
-        } else if (filterStatus === "inactive") {
-          filterQuery = "isactive.eq.false";
-        } // else 'all' no filter
+        if (filterStatus === "active") filterQuery = "isactive.eq.true";
+        else if (filterStatus === "inactive") filterQuery = "isactive.eq.false";
 
         const { data: companiesData, error: companyError } = await supabase
           .from("companies")
           .select("*")
-          .or(filterStatus === "all" ? "isactive.is.null,isactive.eq.true,isactive.eq.false" : filterQuery);
+          .or(
+            filterStatus === "all"
+              ? "isactive.is.null,isactive.eq.true,isactive.eq.false"
+              : filterQuery
+          );
 
         if (companyError) throw companyError;
 
-        // Fetch bills data
         const { data: billsData, error: billsError } = await supabase
           .from("bills")
-          .select("company_id, amount")
-          .not("company_id", "is", null);
-
+          .select("company_id, amount");
         if (billsError) throw billsError;
 
-        const billMap = new Map();
+        const { data: txData, error: txError } = await supabase
+          .from("transactions")
+          .select("company_id, type, amount");
+        if (txError) throw txError;
 
+        const billMap = new Map();
         for (const bill of billsData) {
           const companyId = String(bill.company_id);
           const amount = Number(bill.amount) || 0;
+          billMap.set(companyId, {
+            totalBills: (billMap.get(companyId)?.totalBills || 0) + 1,
+            totalAmount: (billMap.get(companyId)?.totalAmount || 0) + amount,
+          });
+        }
 
-          if (!billMap.has(companyId)) {
-            billMap.set(companyId, { totalBills: 0, totalAmount: 0 });
-          }
-
-          const stats = billMap.get(companyId);
-          stats.totalBills += 1;
-          stats.totalAmount += amount;
-          billMap.set(companyId, stats);
+        const txMap = new Map();
+        for (const tx of txData) {
+          const companyId = String(tx.company_id);
+          const amount = Number(tx.amount) || 0;
+          const stats = txMap.get(companyId) || { totalBuys: 0, totalSells: 0 };
+          if (tx.type === "buy") stats.totalBuys += amount;
+          if (tx.type === "sell") stats.totalSells += amount;
+          txMap.set(companyId, stats);
         }
 
         const processed = companiesData.map((c) => {
-          const stats = billMap.get(String(c.id)) || { totalBills: 0, totalAmount: 0 };
+          const billStats = billMap.get(String(c.id)) || {
+            totalBills: 0,
+            totalAmount: 0,
+          };
+          const txStats = txMap.get(String(c.id)) || {
+            totalBuys: 0,
+            totalSells: 0,
+          };
           return {
             id: c.id,
             name: c.company_name,
             gst: c.gst_no,
             address: c.address,
             isactive: c.isactive !== false,
-            totalBills: stats.totalBills,
-            totalAmount: stats.totalAmount,
+            totalBills: billStats.totalBills,
+            totalAmount: billStats.totalAmount,
+            totalBuys: txStats.totalBuys,
+            totalSells: txStats.totalSells,
           };
         });
 
         setCompanies(processed);
-        setCurrentPage(1); // reset to page 1 on filter change
+        setCurrentPage(1);
       } catch (error) {
-        console.error("Error fetching companies or bills:", error.message);
+        console.error("Error fetching companies:", error.message);
       } finally {
         setLoadingCompanies(false);
       }
     };
 
     fetchCompanies();
-  }, [filterStatus]);
+  }, [filterStatus, openActionDialog]);
 
-  // Filter + search
+  const handleFetchHistory = async (companyId) => {
+    const { data: billsData, error: billsError } = await supabase
+      .from("bills")
+      .select("amount, created_at")
+      .eq("company_id", companyId);
+
+    const { data: txData, error: txError } = await supabase
+      .from("transactions")
+      .select("amount, type, created_at")
+      .eq("company_id", companyId);
+
+    if (billsError || txError) {
+      console.error("Error fetching history:", billsError || txError);
+      return [];
+    }
+
+    const history = [
+      ...billsData.map((b) => ({ ...b, type: "bill" })),
+      ...txData.map((t) => ({ ...t, type: t.type })),
+    ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    return history;
+  };
+
+  const handleOpenActionDialog = async (company) => {
+    setSelectedCompany(company);
+    setOpenActionDialog(true);
+    const history = await handleFetchHistory(company.id);
+    setHistoryData(history);
+  };
+
+  const handleAddTransaction = async (e) => {
+    e.preventDefault();
+    if (!selectedCompany || !transactionAmount) return;
+
+    const { error } = await supabase.from("transactions").insert([
+      {
+        company_id: selectedCompany.id,
+        type: transactionType,
+        amount: Number(transactionAmount),
+      },
+    ]);
+
+    if (error) {
+      console.error("Error adding transaction:", error.message);
+      return;
+    }
+
+    setTransactionAmount("");
+    setOpenActionDialog(false);
+  };
+
+  const handleAddPayment = async (e) => {
+    e.preventDefault();
+    if (!selectedCompany || !paymentAmount) return;
+
+    const { error } = await supabase.from("bills").insert([
+      {
+        company_id: selectedCompany.id,
+        amount: Number(paymentAmount),
+      },
+    ]);
+
+    if (error) {
+      console.error("Error adding payment:", error.message);
+      return;
+    }
+
+    setPaymentAmount("");
+    // Re-fetch history to update the list
+    const updatedHistory = await handleFetchHistory(selectedCompany.id);
+    setHistoryData(updatedHistory);
+  };
+
   const filteredCompanies = companies.filter(
     (company) =>
       company.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       company.gst.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Pagination
   const totalPages = Math.ceil(filteredCompanies.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-  const paginatedCompanies = filteredCompanies.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const paginatedCompanies = filteredCompanies.slice(
+    startIndex,
+    startIndex + ITEMS_PER_PAGE
+  );
 
   const columns = [
     { key: "sno", label: "S.No" },
@@ -104,16 +219,23 @@ const CompaniesTable = () => {
     { key: "address", label: "Address" },
     { key: "totalBills", label: "Total Bills" },
     { key: "totalAmount", label: "Total Amount" },
+    { key: "action", label: "Action" },
   ];
 
   const renderCell = (company, key, index) => {
     switch (key) {
       case "sno":
-        return <div className="font-medium text-center">{startIndex + index + 1}</div>;
+        return (
+          <div className="font-medium text-center">{startIndex + index + 1}</div>
+        );
       case "name":
         return <div className="font-medium text-foreground">{company.name}</div>;
       case "gst":
-        return <Badge variant="outline" className="text-xs">{company.gst}</Badge>;
+        return (
+          <Badge variant="outline" className="text-xs">
+            {company.gst}
+          </Badge>
+        );
       case "address":
         return (
           <div className="text-sm text-muted-foreground max-w-xs truncate">
@@ -121,12 +243,126 @@ const CompaniesTable = () => {
           </div>
         );
       case "totalBills":
-        return <div className="text-center font-medium">{company.totalBills}</div>;
+        return (
+          <div className="text-center font-medium">{company.totalBills}</div>
+        );
       case "totalAmount":
         return (
           <div className="text-right font-medium text-green-600">
             ₹{(company.totalAmount ?? 0).toLocaleString()}
           </div>
+        );
+      case "action":
+        return (
+          <Dialog open={openActionDialog && selectedCompany?.id === company.id} onOpenChange={setOpenActionDialog}>
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleOpenActionDialog(company)}
+              >
+                <MoreHorizontal className="w-5 h-5" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Actions for {selectedCompany?.name}</DialogTitle>
+              </DialogHeader>
+              <Tabs defaultValue="addTransaction" className="w-full mt-4">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="addTransaction">Add Transaction</TabsTrigger>
+                  <TabsTrigger value="paymentHistory">Payment History</TabsTrigger>
+                </TabsList>
+                <TabsContent value="addTransaction" className="pt-4">
+                  <form onSubmit={handleAddTransaction} className="space-y-4">
+                    <div>
+                      <Label htmlFor="transactionType">Transaction Type</Label>
+                      <select
+                        id="transactionType"
+                        value={transactionType}
+                        onChange={(e) => setTransactionType(e.target.value)}
+                        className="border rounded w-full p-2 mt-1"
+                      >
+                        <option value="buy">Buy</option>
+                        <option value="sell">Sell</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="transactionAmount">Amount</Label>
+                      <Input
+                        id="transactionAmount"
+                        type="number"
+                        placeholder="Enter amount"
+                        value={transactionAmount}
+                        onChange={(e) => setTransactionAmount(e.target.value)}
+                      />
+                    </div>
+
+                    <Button type="submit" className="w-full flex items-center gap-2">
+                      <PlusCircle className="w-4 h-4" /> Add Transaction
+                    </Button>
+                  </form>
+                </TabsContent>
+                <TabsContent value="paymentHistory" className="pt-4">
+                  <div className="max-h-[40vh] overflow-y-auto pr-2">
+                    {historyData.length === 0 ? (
+                      <p className="text-center text-muted-foreground">No history found.</p>
+                    ) : (
+                      <div className="space-y-4">
+                        {historyData.map((item, index) => (
+                          <div
+                            key={index}
+                            className="flex items-center justify-between p-3 rounded-md border"
+                          >
+                            <div className="flex items-center space-x-3">
+                              {item.type === "bill" ? (
+                                <History className="text-blue-500" />
+                              ) : item.type === "buy" ? (
+                                <ArrowRight className="text-green-500" />
+                              ) : (
+                                <ArrowRight className="text-red-500 rotate-180" />
+                              )}
+                              <div>
+                                <p className="font-medium">
+                                  {item.type === "bill"
+                                    ? "Bill Payment"
+                                    : item.type === "buy"
+                                    ? "Purchase"
+                                    : "Sale"}
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                  {new Date(item.created_at).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="font-semibold text-lg">
+                              ₹{item.amount.toLocaleString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <form onSubmit={handleAddPayment} className="space-y-4 mt-4">
+                    <div className="space-y-1">
+                      <Label htmlFor="paymentAmount">Add a Payment</Label>
+                      <Input
+                        id="paymentAmount"
+                        type="number"
+                        placeholder="Enter amount"
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                      />
+                    </div>
+                    <Button type="submit" className="w-full flex items-center gap-2">
+                      <PlusCircle className="w-4 h-4" /> Add Payment
+                    </Button>
+                  </form>
+                </TabsContent>
+              </Tabs>
+            </DialogContent>
+          </Dialog>
         );
       default:
         return company[key];
@@ -138,8 +374,12 @@ const CompaniesTable = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Company Directory</h1>
-          <p className="text-muted-foreground">View all business companies and their key data.</p>
+          <h1 className="text-3xl font-bold text-foreground">
+            Company Directory
+          </h1>
+          <p className="text-muted-foreground">
+            View all business companies and their key data.
+          </p>
         </div>
       </div>
 
@@ -181,12 +421,16 @@ const CompaniesTable = () => {
           {loadingCompanies ? (
             <div className="flex justify-center items-center py-12">
               <Loader2 className="h-10 w-10 animate-spin text-blue-500" />
-              <p className="ml-4 text-lg text-muted-foreground">Loading companies...</p>
+              <p className="ml-4 text-lg text-muted-foreground">
+                Loading companies...
+              </p>
             </div>
           ) : filteredCompanies.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Building2 className="h-16 w-16 text-muted-foreground mb-4 opacity-70" />
-              <h3 className="text-xl font-semibold text-foreground mb-2">No companies found</h3>
+              <h3 className="text-xl font-semibold text-foreground mb-2">
+                No companies found
+              </h3>
               <p className="text-muted-foreground max-w-md">
                 {searchTerm
                   ? "No companies match your search criteria."
@@ -211,7 +455,10 @@ const CompaniesTable = () => {
                   </thead>
                   <tbody className="bg-card divide-y divide-border">
                     {paginatedCompanies.map((company, index) => (
-                      <tr key={company.id} className="hover:bg-muted/50 transition-colors">
+                      <tr
+                        key={company.id}
+                        className="hover:bg-muted/50 transition-colors"
+                      >
                         {columns.map((column) => (
                           <td
                             key={column.key}
